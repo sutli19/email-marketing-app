@@ -4,6 +4,8 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import { authRouter } from "./routes/auth";
 import { contactsRouter } from "./routes/contacts";
+import { tagsRouter } from "./routes/tags";
+import { audiencesRouter } from "./routes/audiences";
 import { errorHandler } from "./middleware/errorHandler";
 
 export function createApp() {
@@ -22,6 +24,8 @@ export function createApp() {
 
   app.use("/api/auth", authRouter);
   app.use("/api/contacts", contactsRouter);
+  app.use("/api/tags", tagsRouter);
+  app.use("/api/audiences", audiencesRouter);
 
   app.use(errorHandler);
 

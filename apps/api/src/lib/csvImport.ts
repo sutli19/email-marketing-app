@@ -1,6 +1,7 @@
 import { parse } from "csv-parse/sync";
 import { PoolClient } from "pg";
 import { normalizeEmail, normalizePhone } from "./normalize";
+import { resolveTagIds, assignTagsToContact } from "./tags";
 
 interface ParsedRow {
   email: string | null;
@@ -9,6 +10,7 @@ interface ParsedRow {
   lastName: string | null;
   city: string | null;
   customFields: Record<string, unknown>;
+  tagNames: string[];
 }
 
 interface CanonicalRow extends ParsedRow {
@@ -16,7 +18,7 @@ interface CanonicalRow extends ParsedRow {
   normalizedPhone: string | null;
 }
 
-const KNOWN_HEADERS: Record<string, keyof Omit<ParsedRow, "customFields">> = {
+const KNOWN_HEADERS: Record<string, keyof Omit<ParsedRow, "customFields" | "tagNames">> = {
   email: "email",
   "e-mail": "email",
   phone: "phone",
@@ -54,12 +56,22 @@ export function parseContactsCsv(buffer: Buffer): { rows: ParsedRow[]; invalidCo
       lastName: null,
       city: null,
       customFields: {},
+      tagNames: [],
     };
 
     for (const [rawHeader, rawValue] of Object.entries(record)) {
       const value = (rawValue ?? "").trim();
       if (value === "") continue;
       const key = headerKey(rawHeader);
+      if (key === "tags") {
+        // Maps into the reusable Tags system (see lib/tags.ts) instead of
+        // being stored as a plain customFields string.
+        row.tagNames = value
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+        continue;
+      }
       if (key === "name") {
         // Handles a single full-name column (as in the supplied
         // contacts.csv), splitting on the first space. KNOWN_HEADERS only
@@ -99,6 +111,7 @@ function mergeFields(target: CanonicalRow, source: ParsedRow) {
   target.normalizedEmail = target.normalizedEmail ?? normalizeEmail(source.email);
   target.normalizedPhone = target.normalizedPhone ?? normalizePhone(source.phone);
   target.customFields = { ...source.customFields, ...target.customFields };
+  target.tagNames = [...target.tagNames, ...source.tagNames];
 }
 
 /**
@@ -171,6 +184,8 @@ export async function applyContactsImport(
       (row.normalizedEmail && byEmail.get(row.normalizedEmail)) ||
       (row.normalizedPhone && byPhone.get(row.normalizedPhone));
 
+    let contactId: string;
+
     if (existingId) {
       // Merge: only fill columns that are currently null, and shallow-merge
       // custom_fields without clobbering existing keys.
@@ -194,6 +209,7 @@ export async function applyContactsImport(
           JSON.stringify(row.customFields),
         ]
       );
+      contactId = existingId;
       merged++;
     } else {
       const inserted = await client.query<{ id: string }>(
@@ -210,11 +226,17 @@ export async function applyContactsImport(
           JSON.stringify(row.customFields),
         ]
       );
+      contactId = inserted.rows[0].id;
       // register newly-added row so later rows in the same file can still
       // match against it (handles A/B/C chains within one upload)
-      if (row.normalizedEmail) byEmail.set(row.normalizedEmail, inserted.rows[0].id);
-      if (row.normalizedPhone) byPhone.set(row.normalizedPhone, inserted.rows[0].id);
+      if (row.normalizedEmail) byEmail.set(row.normalizedEmail, contactId);
+      if (row.normalizedPhone) byPhone.set(row.normalizedPhone, contactId);
       added++;
+    }
+
+    if (row.tagNames.length > 0) {
+      const tagIds = await resolveTagIds(client, accountId, row.tagNames);
+      await assignTagsToContact(client, accountId, contactId, tagIds);
     }
   }
 

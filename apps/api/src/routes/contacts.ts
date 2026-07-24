@@ -28,6 +28,7 @@ function rowFromRequest(body: z.infer<typeof contactSchema>) {
     lastName: body.lastName ?? null,
     city: body.city ?? null,
     customFields: body.customFields ?? {},
+    tagNames: [],
   };
 }
 
@@ -151,6 +152,61 @@ contactsRouter.delete("/:id", async (req, res, next) => {
       client.query("DELETE FROM contacts WHERE id = $1 RETURNING id", [req.params.id])
     );
     if (result.rows.length === 0) return res.status(404).json({ error: "Contact not found" });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /contacts/:id/tags — attach an existing tag to a contact
+contactsRouter.post("/:id/tags", async (req, res, next) => {
+  try {
+    const parsed = z.object({ tagId: z.string().uuid() }).safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0].message });
+    }
+
+    const outcome = await withAccountScope(req.auth!.accountId, async (client) => {
+      // FK checks on contact_tags don't go through RLS, so without this,
+      // a client-supplied contactId/tagId could reference another
+      // account's row as long as the *link* row's own account_id (which
+      // we set ourselves below) matches — this is what actually stops it.
+      const owned = await client.query(
+        `SELECT EXISTS
+           (SELECT 1 FROM contacts WHERE id = $1 AND account_id = $3) AS contact_ok,
+           (SELECT 1 FROM tags WHERE id = $2 AND account_id = $3) AS tag_ok`,
+        [req.params.id, parsed.data.tagId, req.auth!.accountId]
+      );
+      const { contact_ok, tag_ok } = owned.rows[0];
+      if (!contact_ok || !tag_ok) return "not_found" as const;
+
+      await client.query(
+        `INSERT INTO contact_tags (contact_id, tag_id, account_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (contact_id, tag_id) DO NOTHING`,
+        [req.params.id, parsed.data.tagId, req.auth!.accountId]
+      );
+      return "ok" as const;
+    });
+
+    if (outcome === "not_found") {
+      return res.status(404).json({ error: "Contact or tag not found" });
+    }
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /contacts/:id/tags/:tagId — detach a tag from a contact
+contactsRouter.delete("/:id/tags/:tagId", async (req, res, next) => {
+  try {
+    await withAccountScope(req.auth!.accountId, (client) =>
+      client.query("DELETE FROM contact_tags WHERE contact_id = $1 AND tag_id = $2", [
+        req.params.id,
+        req.params.tagId,
+      ])
+    );
     res.status(204).send();
   } catch (err) {
     next(err);
