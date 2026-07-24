@@ -1,0 +1,19 @@
+name,email,phone,city,tags
+Aarav Sharma,aarav@example.com,+919876543210,Mumbai,"vip,newsletter"
+Priya Patel,priya@example.com,+919812345678,Mumbai,newsletter
+Rohan Mehta,rohan@example.com,+919900112233,Delhi,vip
+Sneha Iyer,sneha@example.com,+919845098450,Bengaluru,newsletter
+Vikram Singh,vikram@example.com,+919765432100,Delhi,"delhi,vip"
+Ananya Rao,ananya@example.com,+919723456789,Delhi,delhi
+Karan Kapoor,karan@example.com,+919688776655,Pune,newsletter
+Meera Nair,sneha@example.com,+919845098450,Bengaluru,newsletter
+Arjun Desai,arjun@example.com,+919833445566,Mumbai,vip
+Isha Gupta,isha@example.com,+919877001122,Delhi,newsletter
+Dev Malhotra,priya@example.com,+919812345678,Mumbai,delhi
+Nisha Reddy,nisha@example.com,+919744556677,Delhi,"newsletter,delhi"
+Sameer Khan,sameer@example.com,+919655443322,Mumbai,mumbai
+Tara Joshi,tara@example.com,+919788990011,Pune,"vip,newsletter"
+Rahul Verma,rahul@example.com,+919822334455,Delhi,delhi
+Pooja Bhat,pooja@example.com,+919766778899,Bengaluru,mumbai
+Aditya Kumar,aditya@example.com,+919899887766,Delhi,"vip,delhi"
+Kavya Menon,kavya@example.com,+919911223344,Bengaluru,newsletter

@@ -1,0 +1,16 @@
+{
+  "name": "email-marketing-app",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "db:migrate": "npm run migrate --workspace=packages/db",
+    "db:migrate:down": "npm run migrate:down --workspace=packages/db",
+    "dev:api": "npm run dev --workspace=apps/api"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

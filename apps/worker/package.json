@@ -1,0 +1,6 @@
+{
+  "name": "@email-app/worker",
+  "version": "0.0.1",
+  "private": true,
+  "description": "BullMQ worker — campaign dispatch and email-send queues. Scaffolded when we get to the scheduling phase."
+}

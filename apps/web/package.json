@@ -1,0 +1,6 @@
+{
+  "name": "@email-app/web",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Next.js frontend. Scaffolded once the API has endpoints to call."
+}
