@@ -83,3 +83,17 @@ export interface ImportSummary {
   merged: number;
   skippedInvalid: number;
 }
+
+// --- BullMQ job payloads (Phase D scaffold) ---
+// Defined here, not in apps/worker, so the worker and the producer added
+// to the API in Phase F share one typed contract for the job payload
+// instead of each side keeping its own copy that can drift out of sync.
+// The queue name lives alongside it for the same reason: one constant
+// both sides import, not a magic string duplicated in two packages.
+
+export const CAMPAIGN_SEND_QUEUE_NAME = "campaign-send" as const;
+
+export interface CampaignSendJobData {
+  campaignId: string;
+  accountId: string;
+}
