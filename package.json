@@ -6,11 +6,13 @@
     "packages/*"
   ],
   "scripts": {
-    "db:migrate": "npm run migrate --workspace=packages/db",
-    "db:migrate:down": "npm run migrate:down --workspace=packages/db",
-    "dev:api": "npm run dev --workspace=apps/api"
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:worker": "npm run dev --workspace=apps/worker",
+    "dev:web": "npm run dev --workspace=apps/web"
+    
   },
   "engines": {
     "node": ">=18"
   }
 }
+
