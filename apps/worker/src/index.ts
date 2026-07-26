@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { CAMPAIGN_SEND_QUEUE_NAME } from "@email-app/shared";
 import { campaignSendWorker } from "./worker";
-
+import http from "http";
+http.createServer((_, res) => res.end("ok")).listen(process.env.PORT || 10000);
 console.log(`[worker] started, listening on queue "${CAMPAIGN_SEND_QUEUE_NAME}"`);
 
 // Errors that don't surface through BullMQ's own 'error'/'failed' events
