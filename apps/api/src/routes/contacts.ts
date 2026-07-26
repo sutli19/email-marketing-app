@@ -13,10 +13,13 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 const contactSchema = z.object({
   email: z.string().email().optional().nullable(),
-  phone: z.string().optional().nullable(),
-  firstName: z.string().optional().nullable(),
-  lastName: z.string().optional().nullable(),
-  city: z.string().optional().nullable(),
+  phone: z.string()
+  .regex(/^[0-9+()\-\s]+$/, "Phone can only contain digits, +, -, (), and spaces")
+  .refine((val) => (val.match(/\d/g) ?? []).length <= 10, "Phone can have at most 10 digits")
+  .optional().nullable(),
+  firstName: z.string().regex(/^[A-Za-z\s'-]+$/, "First name can only contain letters").optional().nullable(),
+  lastName: z.string().regex(/^[A-Za-z\s'-]+$/, "Last name can only contain letters").optional().nullable(),
+  city: z.string().regex(/^[A-Za-z\s'-]+$/, "City can only contain letters").optional().nullable(),
   customFields: z.record(z.unknown()).optional(),
 });
 
