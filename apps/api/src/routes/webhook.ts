@@ -1,0 +1,191 @@
+import { Router } from "express";
+import { z } from "zod";
+import { queryUnscoped, withAccountScope } from "@email-app/db";
+import { verifybrevoSignature } from "../lib/brevoWebhook";
+
+export const webhooksRouter = Router();
+
+// Deliberately NOT behind requireAuth (no campaignsRouter.use(requireAuth)
+// equivalent here) — brevo has no way to carry a session/JWT. Trust
+// comes entirely from verifybrevoSignature() below.
+
+// Only these two event types touch campaign_recipients / analytics in
+// this phase, per the approved Analytics plan. Everything else brevo
+// sends (accepted, clicked, failed, complained, unsubscribed,
+// temporary_fail, ...) is still logged to webhook_events for
+// audit/history, but never applied to a recipient row.
+const TRACKED_EVENTS = new Set(["delivered", "opened"]);
+
+// Loose validation: only the fields this route actually reads are
+// required. .passthrough() at both levels so unrecognized brevo
+// fields don't fail parsing — the full raw body is stored in
+// webhook_events.payload regardless of which fields we understood.
+const brevoWebhookSchema = z
+  .object({
+    signature: z.object({
+      timestamp: z.string(),
+      token: z.string(),
+      signature: z.string(),
+    }),
+    "event-data": z
+      .object({
+        id: z.string(), // brevo's own event id — used as our provider_event_id
+        event: z.string(),
+        message: z
+          .object({
+            headers: z
+              .object({
+                "message-id": z.string().optional(),
+              })
+              .partial()
+              .optional(),
+          })
+          .optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+/**
+ * CONFIRMED from apps/worker/src/brevo.ts's own SendEmailResult type
+ * comment: brevo's send API returns an `id` wrapped in angle brackets
+ * — e.g. "<20240101120000.1.ABC123@sandbox....brevo.org>" — and per
+ * worker.ts's recordSendResult() that value is stored verbatim as
+ * campaign_recipients.provider_message_id. So the stored format IS
+ * bracketed; that part is no longer a guess.
+ *
+ * What's still unverified is brevo's webhook payload shape: brevo's
+ * documented webhook behavior is to deliver the same id *unwrapped*
+ * under event-data.message.headers['message-id'] (this is a
+ * long-standing, widely-documented brevo quirk — send API responses
+ * are bracketed, webhook headers are not). This function re-wraps it so
+ * the equality lookup below still hits provider_message_id's unique
+ * index. Since there's no captured real webhook payload to check yet,
+ * confirm this against an actual brevo webhook delivery during Phase
+ * G4 (end-to-end testing) — if it turns out brevo already includes
+ * the brackets, this function becomes a no-op (harmless either way,
+ * since it only adds brackets when they're missing) and could be
+ * deleted for clarity at that point.
+ */
+function normalizeProviderMessageId(webhookMessageId: string): string {
+  const trimmed = webhookMessageId.trim();
+  return trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed : `<${trimmed}>`;
+}
+
+// POST /api/webhooks/brevo
+webhooksRouter.post("/brevo", async (req, res, next) => {
+  try {
+    const parsed = brevoWebhookSchema.safeParse(req.body);
+    if (!parsed.success) {
+      console.warn("[webhooks] brevo: malformed payload —", parsed.error.issues[0]?.message);
+      return res.status(400).json({ error: "Malformed webhook payload" });
+    }
+    const { signature, "event-data": eventData } = parsed.data;
+
+    // 1. Verify signature.
+    if (!verifybrevoSignature(signature)) {
+      console.warn("[webhooks] brevo: signature verification failed");
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+
+    const eventType = eventData.event;
+    const providerEventId = eventData.id;
+    const rawMessageId = eventData.message?.headers?.["message-id"] ?? null;
+
+    // 2. Idempotent insert of every event, regardless of type, for
+    // audit/history. webhook_events is deliberately excluded from RLS
+    // (migrations 0004/0005 — it arrives before we know an account_id),
+    // and queryUnscoped (packages/db/src/index.ts) is the sanctioned
+    // helper for exactly this "don't know the account yet" case — its
+    // own doc comment gives "looking up a row before we know the
+    // account" as the canonical example, which is exactly this insert.
+    const inserted = await queryUnscoped<{ id: string }>(
+      `INSERT INTO webhook_events (provider_event_id, provider_message_id, event_type, payload)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (provider_event_id) DO NOTHING
+       RETURNING id`,
+      [providerEventId, rawMessageId, eventType, JSON.stringify(req.body)]
+    );
+
+    // 3. Duplicate delivery (brevo retries on non-200) — already
+    // logged, nothing further to do.
+    if (inserted.rows.length === 0) {
+      return res.status(200).json({ received: true, duplicate: true });
+    }
+
+    // 4/5. Only delivered/opened continue past here.
+    if (!TRACKED_EVENTS.has(eventType)) {
+      return res.status(200).json({ received: true, tracked: false });
+    }
+
+    if (!rawMessageId) {
+      console.warn(`[webhooks] brevo: ${eventType} event ${providerEventId} has no message-id header`);
+      return res.status(200).json({ received: true, tracked: true, matched: false });
+    }
+
+    const providerMessageId = normalizeProviderMessageId(rawMessageId);
+
+    // campaign_recipients is RLS-protected (migration 0005) and we don't
+    // know account_id yet — that's the whole reason we need this lookup.
+    // A plain queryUnscoped SELECT would return zero rows here, since
+    // app.current_account_id is unset outside withAccountScope's
+    // transaction and NULL never matches the policy's USING clause.
+    //
+    // resolve_campaign_recipient_by_provider_message_id (migration 0006)
+    // is a narrow SECURITY DEFINER function, owned by a dedicated
+    // NOLOGIN/BYPASSRLS role with column-level SELECT on only (id,
+    // account_id). It's the one sanctioned way to cross this gap: no
+    // privileged application connection, no broadening of app_user's own
+    // grants, and it returns only the two columns this handler actually
+    // uses. Still called through queryUnscoped since it's genuinely
+    // account-independent by construction (that's the case
+    // queryUnscoped's own doc comment describes) — the bypass lives
+    // entirely inside the function definition, not in how app_user
+    // connects.
+    const lookup = await queryUnscoped<{ id: string; account_id: string }>(
+      "SELECT id, account_id FROM resolve_campaign_recipient_by_provider_message_id($1)",
+      [providerMessageId]
+    );
+
+    // 6. Unknown provider_message_id — stale test send, a message from
+    // outside this app, or (very rarely) a webhook racing ahead of our
+    // own write. Not an error worth retrying: log and acknowledge.
+    if (lookup.rows.length === 0) {
+      console.warn(
+        `[webhooks] brevo: no campaign_recipients row for provider_message_id ${providerMessageId}`
+      );
+      return res.status(200).json({ received: true, tracked: true, matched: false });
+    }
+
+    const recipient = lookup.rows[0];
+
+    // 7. Forward-only update, now properly account-scoped. COALESCE
+    // keeps the first-seen timestamp on duplicate/out-of-order events.
+    // The status CASE only advances pending/sent(/delivered) forward —
+    // a 'failed' recipient, or one that's already reached this stage or
+    // beyond, is left untouched rather than regressed.
+    await withAccountScope(recipient.account_id, (client) => {
+      if (eventType === "delivered") {
+        return client.query(
+          `UPDATE campaign_recipients
+             SET delivered_at = COALESCE(delivered_at, now()),
+                 status = CASE WHEN status IN ('pending', 'sent') THEN 'delivered' ELSE status END
+           WHERE id = $1`,
+          [recipient.id]
+        );
+      }
+      // eventType === "opened"
+      return client.query(
+        `UPDATE campaign_recipients
+           SET opened_at = COALESCE(opened_at, now()),
+               status = CASE WHEN status IN ('pending', 'sent', 'delivered') THEN 'opened' ELSE status END
+         WHERE id = $1`,
+        [recipient.id]
+      );
+    });
+
+    res.status(200).json({ received: true, tracked: true, matched: true });
+  } catch (err) {
+    next(err);
+  }
+});
