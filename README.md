@@ -4,9 +4,8 @@ A cut-down Mailchimp: sign up, import contacts, group them into audiences,
 send email campaigns (now or scheduled), and watch delivery/open analytics
 tick up in real time.
 
-- **Live app:** ``
-- **Repo:** ``
-- **Walkthrough Loom:** ``
+- **Live app:** `https://email-marketing-app-web.vercel.app`
+
 
 ---
 
