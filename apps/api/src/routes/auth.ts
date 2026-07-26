@@ -9,12 +9,10 @@ export const authRouter = Router();
 
 const COOKIE_OPTS = {
   httpOnly: true,
-  sameSite: "lax" as const,
-  secure: process.env.NODE_ENV === "production",
+  sameSite: "none" as const,
+  secure: true,
   maxAge: 7 * 24 * 60 * 60 * 1000,
-};
-
-const signupSchema = z.object({
+};const signupSchema = z.object({
   accountName: z.string().min(1).max(200),
   email: z.string().email(),
   password: z.string().min(8, "Password must be at least 8 characters"),
