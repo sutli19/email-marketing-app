@@ -73,9 +73,14 @@ export interface CampaignRecipient {
 export interface CampaignAnalytics {
   campaignId: string;
   totalRecipients: number;
+  pending: number;
   sent: number;
   delivered: number;
   opened: number;
+  // Percentages (0–100), not fractions — e.g. 74.2 means 74.2%, ready to
+  // display with a trailing "%". See GET /:id/analytics in campaigns.ts.
+  deliveryRate: number;
+  openRate: number;
 }
 
 export interface ImportSummary {

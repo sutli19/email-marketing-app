@@ -6,3 +6,7 @@ coverage/
 .vscode/
 .DS_Store
 .kilo/
+cat >> .gitignore << 'EOF'
+.next/
+*.tsbuildinfo
+EOF
