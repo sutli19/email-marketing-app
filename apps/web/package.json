@@ -2,5 +2,22 @@
   "name": "@email-app/web",
   "version": "0.0.1",
   "private": true,
-  "description": "Next.js frontend. Scaffolded once the API has endpoints to call."
+  "description": "Next.js frontend. Scaffolded once the API has endpoints to call.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@email-app/shared": "*",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.5.4"
+  }
 }
