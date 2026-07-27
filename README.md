@@ -6,7 +6,6 @@ tick up in real time.
 
 - **Live app:** `https://email-marketing-app-web.vercel.app`
 
-
 ---
 
 ## Stack

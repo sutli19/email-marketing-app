@@ -88,8 +88,7 @@ async function main() {
   // they need the owning/admin connection, not the restricted app_user
   // role the API/worker use at runtime. Falls back to DATABASE_URL for
   // convenience in local dev where there's often only one role.
-  const connectionString = process.env.MIGRATIONS_DATABASE_URL || process.env.DATABASE_URL;
-  const pool = new Pool({ connectionString, ssl: { rejectUnauthorized: false } });
+  const connectionString = process.env.MIGRATIONS_DATABASE_URL || process.env.DATABASE_URL;const pool = new Pool({ connectionString, ssl: { rejectUnauthorized: false } });
   try {
     if (direction === "down") {
       await down(pool);
