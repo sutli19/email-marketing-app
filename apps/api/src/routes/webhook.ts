@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
 import { queryUnscoped, withAccountScope } from "@email-app/db";
-import { verifybrevoSignature } from "../lib/brevoWebhook";
+import { verifyBrevoWebhookToken } from "../lib/brevoWebhook";
 
 export const webhooksRouter = Router();
 
 // Deliberately NOT behind requireAuth (no campaignsRouter.use(requireAuth)
 // equivalent here) — brevo has no way to carry a session/JWT. Trust
-// comes entirely from verifybrevoSignature() below.
+// comes entirely from the ?token= query param checked via
+// verifyBrevoWebhookToken() below.
 
 // Only these two event types touch campaign_recipients / analytics in
 // this phase, per the approved Analytics plan. Everything else brevo
@@ -17,32 +18,14 @@ export const webhooksRouter = Router();
 const TRACKED_EVENTS = new Set(["delivered", "opened"]);
 
 // Loose validation: only the fields this route actually reads are
-// required. .passthrough() at both levels so unrecognized brevo
-// fields don't fail parsing — the full raw body is stored in
-// webhook_events.payload regardless of which fields we understood.
+// required. .passthrough() so unrecognized brevo fields don't fail
+// parsing — the full raw body is stored in webhook_events.payload
+// regardless of which fields we understood.
 const brevoWebhookSchema = z
   .object({
-    signature: z.object({
-      timestamp: z.string(),
-      token: z.string(),
-      signature: z.string(),
-    }),
-    "event-data": z
-      .object({
-        id: z.string(), // brevo's own event id — used as our provider_event_id
-        event: z.string(),
-        message: z
-          .object({
-            headers: z
-              .object({
-                "message-id": z.string().optional(),
-              })
-              .partial()
-              .optional(),
-          })
-          .optional(),
-      })
-      .passthrough(),
+    event: z.string(),
+    id: z.union([z.string(), z.number()]),
+    "message-id": z.string().optional(),
   })
   .passthrough();
 
@@ -80,17 +63,17 @@ webhooksRouter.post("/brevo", async (req, res, next) => {
       console.warn("[webhooks] brevo: malformed payload —", parsed.error.issues[0]?.message);
       return res.status(400).json({ error: "Malformed webhook payload" });
     }
-    const { signature, "event-data": eventData } = parsed.data;
+    const eventData = parsed.data;
 
-    // 1. Verify signature.
-    if (!verifybrevoSignature(signature)) {
-      console.warn("[webhooks] brevo: signature verification failed");
-      return res.status(401).json({ error: "Invalid signature" });
+    // 1. Verify token.
+    if (!verifyBrevoWebhookToken(req.query.token as string | undefined)) {
+      console.warn("[webhooks] brevo: token verification failed");
+      return res.status(401).json({ error: "Invalid token" });
     }
 
     const eventType = eventData.event;
-    const providerEventId = eventData.id;
-    const rawMessageId = eventData.message?.headers?.["message-id"] ?? null;
+    const providerEventId = String(eventData.id);
+    const rawMessageId = eventData["message-id"] ?? null;
 
     // 2. Idempotent insert of every event, regardless of type, for
     // audit/history. webhook_events is deliberately excluded from RLS
