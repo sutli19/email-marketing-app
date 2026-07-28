@@ -77,11 +77,17 @@ mock-data/
   delivery/open rates.
 - Delivered/opened counts are driven **entirely by Brevo's webhook**
   (`POST /api/webhooks/brevo`), not guessed or polled from Brevo's API. The webhook:
-  - verifies Brevo's HMAC signature before trusting anything in the payload,
+  - verifies a shared secret passed as a `?token=` query param on the webhook URL,
+    checked with a constant-time comparison (`crypto.timingSafeEqual`) — Brevo, unlike
+    Mailgun, does not HMAC-sign its webhook bodies, so a shared token in the URL is the
+    actual mechanism Brevo supports, not a signature header,
   - logs every event (any type) to a `webhook_events` table for audit/idempotency,
   - ignores duplicate deliveries (Brevo retries on non-200) via a unique constraint,
   - only ever moves a recipient's status **forward** (`pending → sent → delivered →
-    opened`), so an out-of-order or duplicate event can't regress it.
+    opened`), so an out-of-order or duplicate event can't regress it,
+  - resolves the recipient's `account_id` via a narrow `SECURITY DEFINER` lookup
+    function (since the webhook arrives with no session/account context of its own),
+    then applies the update through the normal RLS-scoped connection.
 - The campaign detail page polls `GET /:id/analytics` every 5 seconds while a campaign is
   `sending`, `sent`, or `failed`, so counts visibly tick up without a manual refresh.
 
@@ -97,6 +103,15 @@ mock-data/
   Brevo's transactional API supports base64 attachments directly, so the main work would
   be a file upload on the campaign form (multer, similar to the CSV importer) and passing
   the buffer through to `sendEmail()`.
+- **Custom fields have no frontend at all.** The backend fully supports them —
+  `contacts.custom_fields` (JSONB), the CSV importer maps any unrecognized column into
+  it (e.g. a `hobbies` column becomes `custom_fields.hobbies`), and the API returns/accepts
+  `customFields` on every contact — but `apps/web/src/app/contacts/page.tsx` never reads
+  or renders it: the add/edit forms and the table are hardcoded to
+  firstName/lastName/email/phone/city only. So a CSV import with extra columns silently
+  stores the data (verifiable via `GET /api/contacts` or a DB query) with no way to see or
+  edit it from the UI. Fixing this means adding a dynamic key/value list to the contact
+  form and an extra columns/expandable-row in the table — not started.
 
 ---
 
@@ -177,7 +192,7 @@ To roll back the most recent migration: `npm run migrate:down --workspace=packag
 | `BREVO_API_KEY` | worker | Sends transactional email via Brevo. |
 | `BREVO_FROM_EMAIL` | worker | Must be a sender address verified in your Brevo account. |
 | `BREVO_FROM_NAME` | worker | Display name on outgoing email. |
-| `BREVO_WEBHOOK_SIGNING_KEY` | api | Verifies the HMAC signature Brevo attaches to webhook payloads (Brevo dashboard → Sending → Webhooks → HTTP webhook signing key — a separate secret from the API key above). |
+| `BREVO_WEBHOOK_SIGNING_KEY` | api | Shared secret appended as `?token=` on the webhook URL registered in Brevo (Sending → Webhooks). Compared with a constant-time check on every incoming webhook call — a separate secret from the API key above. |
 | `FRONTEND_URL` | api | Allowed CORS origin for the Next.js app (e.g. your deployed frontend URL in production). |
 | `PORT` | api, worker | Defaults to `4000` if unset. |
 | `NODE_ENV` | api | When `production`, marks the session cookie `secure`. |
@@ -224,3 +239,35 @@ root documents the shape above without real secrets.
   against this implementation.
 - No automated test suite — verification so far has been manual, against a running
   Postgres instance and real HTTP requests (curl and the UI), rather than unit tests.
+- **Bounces/blocks aren't reflected anywhere.** `TRACKED_EVENTS` in
+  `apps/api/src/routes/webhook.ts` only acts on `delivered` and `opened` — a `hard_bounce`,
+  `soft_bounce`, or `blocked` event from Brevo is still logged to `webhook_events` for
+  audit, but never changes a recipient's `status`. There's also no `bounced` bucket in the
+  analytics query at all (`GET /:id/analytics` in `apps/api/src/routes/campaigns.ts` only
+  counts `pending`/`sent`/`delivered`/`opened`). Net effect: a recipient that hard-bounces
+  (e.g. a fake/invalid address in a test send) is stuck showing `sent` forever, which reads
+  as "succeeded" even though it didn't. Fixing this needs a `bounced` status + timestamp
+  column, `TRACKED_EVENTS` extended to include bounce/block types, and a `bounced` count
+  added to the analytics response and the UI.
+- **Real opens tracked by Brevo aren't reliably reaching analytics in production.** The
+  most likely cause is `normalizeProviderMessageId()` in
+  `apps/api/src/lib/brevoWebhook.ts` — the code's own comments flag this as an unverified
+  guess about whether Brevo's webhook `message-id` field arrives bracketed
+  (`<...@...>`) the same way the send API's stored `provider_message_id` is. If the guess
+  is wrong, the lookup in `webhook.ts` (`resolve_campaign_recipient_by_provider_message_id`)
+  never matches a recipient row, so the event gets logged to `webhook_events` (visible in
+  the DB) but silently never updates `campaign_recipients.delivered_at`/`opened_at`. To
+  confirm: check the app's `webhook_events` table after opening a real test email — if a
+  matching `opened` row is there but the corresponding `campaign_recipients.opened_at` is
+  still null, this is the bug, and the fix is to log the raw incoming `message-id` and
+  compare it byte-for-byte against what's stored, then adjust the normalization
+  accordingly (or drop it, if Brevo turns out to already send it bracketed).
+- **The worker needs to be manually woken on Render's free tier.** `apps/worker/src/index.ts`
+  binds a dummy HTTP port purely to satisfy Render's health check, because Render's free
+  tier only offers "Web Service" instances (not a true background worker) — but a free Web
+  Service still spins down after ~15 minutes with no inbound HTTP traffic, and this
+  worker's actual job (polling BullMQ/Redis) never generates that traffic. So scheduled or
+  immediate sends silently sit queued until someone visits the worker's Render URL (or a
+  cron/uptime pinger hits it) to wake it back up — which is also why recipients only start
+  moving off `pending` once the service is manually restarted. A paid Render Background
+  Worker (or an external uptime ping every ~10 minutes) would remove the need for this.
