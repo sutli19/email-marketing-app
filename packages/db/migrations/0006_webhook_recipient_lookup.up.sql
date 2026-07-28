@@ -74,7 +74,13 @@ AS $$
   WHERE provider_message_id = p_provider_message_id;
 $$;
 
+-- ALTER ... OWNER TO requires the *new* owner to have CREATE on the
+-- schema, not just the connecting role — grant it only long enough to
+-- complete the ownership transfer, then revoke immediately after, so
+-- webhook_lookup_role doesn't retain schema-wide CREATE going forward.
+GRANT CREATE ON SCHEMA public TO webhook_lookup_role;
 ALTER FUNCTION resolve_campaign_recipient_by_provider_message_id(TEXT) OWNER TO webhook_lookup_role;
+REVOKE CREATE ON SCHEMA public FROM webhook_lookup_role;
 
 REVOKE ALL ON FUNCTION resolve_campaign_recipient_by_provider_message_id(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION resolve_campaign_recipient_by_provider_message_id(TEXT) TO app_user;
