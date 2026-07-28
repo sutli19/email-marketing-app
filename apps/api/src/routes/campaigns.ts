@@ -466,7 +466,8 @@ const CAMPAIGN_ANALYTICS_QUERY = `
     COUNT(cr.id) FILTER (WHERE cr.status = 'pending')::int AS pending,
     COUNT(cr.id) FILTER (WHERE cr.status = 'sent')::int AS sent,
     COUNT(cr.id) FILTER (WHERE cr.delivered_at IS NOT NULL)::int AS delivered,
-    COUNT(cr.id) FILTER (WHERE cr.opened_at IS NOT NULL)::int AS opened
+    COUNT(cr.id) FILTER (WHERE cr.opened_at IS NOT NULL)::int AS opened,
+    COUNT(cr.id) FILTER (WHERE cr.status = 'failed')::int AS failed
   FROM campaigns c
   LEFT JOIN campaign_recipients cr ON cr.campaign_id = c.id
   WHERE c.id = $1
@@ -490,6 +491,7 @@ campaignsRouter.get("/:id/analytics", async (req, res, next) => {
         sent: number;
         delivered: number;
         opened: number;
+        failed: number;
       }>(CAMPAIGN_ANALYTICS_QUERY, [req.params.id])
     );
 
@@ -497,7 +499,7 @@ campaignsRouter.get("/:id/analytics", async (req, res, next) => {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const { total_recipients, pending, sent, delivered, opened } = result.rows[0];
+    const { total_recipients, pending, sent, delivered, opened, failed } = result.rows[0];
 
     const analytics: CampaignAnalytics = {
       campaignId: req.params.id,
@@ -506,6 +508,7 @@ campaignsRouter.get("/:id/analytics", async (req, res, next) => {
       sent,
       delivered,
       opened,
+      failed,
       deliveryRate: total_recipients > 0 ? roundRate(delivered / total_recipients) : 0,
       openRate: delivered > 0 ? roundRate(opened / delivered) : 0,
     };

@@ -499,6 +499,10 @@ function CampaignDetailContent() {
                     {analytics.opened} ({analytics.openRate}%)
                   </td>
                 </tr>
+                <tr>
+                  <td>Failed / bounced</td>
+                  <td>{analytics.failed}</td>
+                </tr>
               </tbody>
             </table>
           ) : (

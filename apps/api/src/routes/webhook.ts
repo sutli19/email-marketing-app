@@ -10,12 +10,14 @@ export const webhooksRouter = Router();
 // comes entirely from the ?token= query param checked via
 // verifyBrevoWebhookToken() below.
 
-// Only these two event types touch campaign_recipients / analytics in
-// this phase, per the approved Analytics plan. Everything else brevo
-// sends (accepted, clicked, failed, complained, unsubscribed,
-// temporary_fail, ...) is still logged to webhook_events for
+// These event types touch campaign_recipients / analytics. hard_bounce
+// and blocked mark a recipient as genuinely undeliverable — an invalid
+// or non-existent address that Brevo's API happily accepted at send
+// time (so it's stuck at 'sent') but that never actually reached an
+// inbox. Everything else brevo sends (accepted, clicked, soft_bounce,
+// complained, unsubscribed, ...) is still logged to webhook_events for
 // audit/history, but never applied to a recipient row.
-const TRACKED_EVENTS = new Set(["delivered", "opened"]);
+const TRACKED_EVENTS = new Set(["delivered", "opened", "hard_bounce", "blocked"]);
 
 // Loose validation: only the fields this route actually reads are
 // required. .passthrough() so unrecognized brevo fields don't fail
@@ -96,7 +98,7 @@ webhooksRouter.post("/brevo", async (req, res, next) => {
       return res.status(200).json({ received: true, duplicate: true });
     }
 
-    // 4/5. Only delivered/opened continue past here.
+    // 4/5. Only tracked event types continue past here.
     if (!TRACKED_EVENTS.has(eventType)) {
       return res.status(200).json({ received: true, tracked: false });
     }
@@ -142,11 +144,23 @@ webhooksRouter.post("/brevo", async (req, res, next) => {
 
     const recipient = lookup.rows[0];
 
-    // 7. Forward-only update, now properly account-scoped. COALESCE
-    // keeps the first-seen timestamp on duplicate/out-of-order events.
-    // The status CASE only advances pending/sent(/delivered) forward —
-    // a 'failed' recipient, or one that's already reached this stage or
-    // beyond, is left untouched rather than regressed.
+    // 7. Now properly account-scoped. COALESCE keeps the first-seen
+    // timestamp on duplicate/out-of-order events.
+    //
+    // delivered/opened remain forward-only: the status CASE only
+    // advances pending/sent(/delivered) forward, and a recipient that's
+    // already 'failed' (a bounce beat a slow 'delivered' webhook to the
+    // punch, or vice versa) is left untouched rather than regressed —
+    // a message that bounced never actually delivered, whatever order
+    // the two webhook calls arrive in.
+    //
+    // hard_bounce/blocked are the one case allowed to move a recipient
+    // OFF 'sent' to 'failed': the send API accepted the message (so it
+    // sits at 'sent'), but the address was never actually reachable.
+    // Guarded to only fire from pending/sent — never overwrites a
+    // recipient that already reached delivered/opened, since a bounce
+    // notification can't be correct once delivery is separately
+    // confirmed.
     await withAccountScope(recipient.account_id, (client) => {
       if (eventType === "delivered") {
         return client.query(
@@ -157,11 +171,20 @@ webhooksRouter.post("/brevo", async (req, res, next) => {
           [recipient.id]
         );
       }
-      // eventType === "opened"
+      if (eventType === "opened") {
+        return client.query(
+          `UPDATE campaign_recipients
+             SET opened_at = COALESCE(opened_at, now()),
+                 status = CASE WHEN status IN ('pending', 'sent', 'delivered') THEN 'opened' ELSE status END
+           WHERE id = $1`,
+          [recipient.id]
+        );
+      }
+      // eventType is hard_bounce or blocked — the only other members of
+      // TRACKED_EVENTS that can reach this point.
       return client.query(
         `UPDATE campaign_recipients
-           SET opened_at = COALESCE(opened_at, now()),
-               status = CASE WHEN status IN ('pending', 'sent', 'delivered') THEN 'opened' ELSE status END
+           SET status = CASE WHEN status IN ('pending', 'sent') THEN 'failed' ELSE status END
          WHERE id = $1`,
         [recipient.id]
       );
