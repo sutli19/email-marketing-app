@@ -29,6 +29,14 @@
 -- following this same pattern. Do not reuse webhook_lookup_role.
 -- ============================================================
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'webhook_lookup_role') THEN
+    CREATE ROLE webhook_lookup_role NOLOGIN;
+  END IF;
+END
+$$;
+
 -- The connecting migration role needs to be a member of
 -- webhook_lookup_role before it can hand ownership of the function to
 -- it below (ALTER FUNCTION ... OWNER TO requires membership). Render's
